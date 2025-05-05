@@ -2,6 +2,7 @@ import random
 import time
 import json
 import shutil
+import os
 from datetime import datetime
 from colorama import Fore, Style
 
@@ -57,8 +58,8 @@ class SeasonSystem:
 class FinancialMarket:
     def __init__(self):
         self.stocks = self.generate_random_stocks()
-        self.bonds = [Bond("GOV01", "国债-3月期", 1.0, 0.03, 90),
-                      Bond("GOV02", "国债-1年期", 10.0, 0.035, 365)] # 确保初始价格为浮点数
+        self.bonds = [Bond("GOV01", "国债-3月期", round(random.uniform(0.5, 1.5), 2), 0.03, 90),
+                      Bond("GOV02", "国债-1年期", round(random.uniform(9.0, 11.0), 2), 0.035, 365)] # 确保初始价格为浮点数
         self.stock_dict = {s.code: s for s in self.stocks}
         self.bond_dict = {b.code: b for b in self.bonds}
         self.day = 0
@@ -90,7 +91,6 @@ class FinancialMarket:
             ("ADBE", "奥多比", 0.13, 300),  # Adobe -> 奥多比
             ("COST", "好市客", 0.11, 220), # Costco -> 好市客
             ("CSCO", "思科", 0.09, 180), # Cisco -> 思科
-            ("CMCSA", "康卡斯特", 0.08, 150), # Comcast -> 康卡斯特
             ("INTC", "英特尔", 0.12, 210), # Intel -> 英特尔
             ("PEPI", "百事", 0.07, 160), # PepsiCo -> 百事
             ("QCOM", "高通", 0.18, 250), # Qualcomm -> 高通
@@ -102,8 +102,19 @@ class FinancialMarket:
         ]
         stocks = []
         for code, name, vol, income in stock_templates:
-            # 基础价格范围调整，并确保为浮点数
-            base_price = float(random.randint(5000, 20000)) # 去除10000倍
+            # 根据波动性设置不同的基础价格范围
+            if vol >= 0.25:
+                # 小型公司 (3000-7999)
+                base_price = round(random.uniform(3000.0, 7999.0), 2)
+            elif vol >= 0.15 and vol < 0.25:
+                # 中型公司 (7000-9999)
+                base_price = round(random.uniform(7000.0, 9999.0), 2)
+            else:
+                # 大型公司 (10000-15999)
+                base_price = round(random.uniform(10000.0, 15999.0), 2)
+
+            # 确保基础价格有效
+            base_price = float(max(base_price, 3000.0)) # 确保价格不低于最低范围的下限
             stocks.append(Asset(code, name, base_price, vol, income))
         return stocks
 
@@ -149,7 +160,8 @@ class FinancialMarket:
 
 # ========== 核心游戏类 ==========
 class StockTycoon:
-    def __init__(self):
+    def __init__(self, save_name='default_save.json'):
+        self.current_save = save_name  # 新增当前存档属性
         self.player = {
             "cash": 10_000_000_000_000.0, # 初始现金为浮点数
             "debt": 1_000_000_000_000.0, # 初始债务为浮点数
@@ -162,18 +174,20 @@ class StockTycoon:
         self.day = 0 # 游戏天数从0开始
         self.total_assets_history = [] # 列表存储每日总资产 (浮点)
         self.trade_history = [] # 新增交易历史记录列表
-        self.load_game()
+        self.stocks_bonds_value_history = [] # 新增股票+债券总价值历史记录列表
+        self.load_game()  # 加载当前存档
         # 确保市场初始数据与当前游戏天数同步
         self.market.set_day(self.day)
 
     def load_game(self):
-        """增强的读档功能"""
+        """根据当前存档名称加载游戏"""
+        filepath = os.path.join('saves', self.current_save)
         try:
-            with open('game_save.json', 'r') as f:
+            with open(filepath, 'r') as f:
                 data = json.load(f)
                 # 加载基础数据，确保数字类型正确
-                self.player["cash"] = float(data.get("player", {}).get("cash", self.player["cash"]))
-                self.player["debt"] = float(data.get("player", {}).get("debt", self.player["debt"]))
+                self.player["cash"] = float(data.get("player", {}).get("cash", self.player["cash"])) if isinstance(data.get("player", {}).get("cash", self.player["cash"]), (int, float)) else 0.0
+                self.player["debt"] = float(data.get("player", {}).get("debt", self.player["debt"])) if isinstance(data.get("player", {}).get("debt", self.player["debt"]), (int, float)) else 0.0
                 # 持仓信息，确保是字典，并加载包含平均成本的数据结构
                 loaded_stocks = data.get("player", {}).get("stocks", {})
                 if isinstance(loaded_stocks, dict):
@@ -217,6 +231,10 @@ class StockTycoon:
                 self.total_assets_history = data.get("total_assets_history", []) # 加载总资产历史
                 if not isinstance(self.total_assets_history, list): self.total_assets_history = []
 
+                # 加载股票+债券总价值历史
+                self.stocks_bonds_value_history = data.get("stocks_bonds_value_history", [])
+                if not isinstance(self.stocks_bonds_value_history, list): self.stocks_bonds_value_history = []
+
 
                 # 加载市场数据
                 market_data = data.get("market", {})
@@ -252,19 +270,20 @@ class StockTycoon:
 
             print(f"{Fore.GREEN}存档加载成功！{Style.RESET_ALL}")
         except FileNotFoundError:
-            print("没有找到存档，使用默认值开始游戏")
+            print(f"新建存档 {self.current_save}，使用默认值开始游戏")
         except json.JSONDecodeError:
              print("存档文件损坏，使用默认值开始游戏")
         except Exception as e:
             print(f"{Fore.RED}存档加载失败：{str(e)}{Style.RESET_ALL}")
 
     def save_game(self):
-        """增强的存档功能"""
+        """保存到当前存档文件"""
         data = {
             "player": self.player, # player字典已经包含了cash, debt, stocks, bonds, shorts
             "day": self.day,
             "trade_history": self.trade_history,
             "total_assets_history": self.total_assets_history, # 保存总资产历史
+            "stocks_bonds_value_history": self.stocks_bonds_value_history, # 保存股票+债券总价值历史
             "market": {
                 "stocks": [{
                     "code": s.code,
@@ -284,18 +303,21 @@ class StockTycoon:
                 } for b in self.market.bonds]
             }
         }
+        filepath = os.path.join('saves', self.current_save)
         try:
-            with open('game_save.json', 'w') as f:
+            if not os.path.exists('saves'):
+                os.makedirs('saves')
+            with open(filepath, 'w') as f:
                 json.dump(data, f, indent=2)
             print("游戏进度已保存")
         except Exception as e:
              print(f"{Fore.RED}存档保存失败：{str(e)}{Style.RESET_ALL}")
 
 
-    def calculate_total_assets(self) -> float:
+    def calculate_total_assets(self):
         """计算玩家总资产"""
         # 确保从player字典获取的值是数字类型，默认为0.0
-        total = float(self.player.get('cash', 0.0))
+        total = float(self.player.get('cash', 0.0)) if isinstance(self.player.get('cash', 0.0), (int, float)) else 0.0
         # 计算股票价值
         stocks_dict = self.player.get('stocks', {})
         # 确保stocks_dict是字典类型，避免.items()错误
@@ -366,7 +388,7 @@ class StockTycoon:
             return
 
         total_cost = bond.current_price * amount
-        current_cash = float(self.player.get('cash', 0.0)) # 确保现金是浮点数
+        current_cash = float(self.player.get('cash', 0.0)) if isinstance(self.player.get('cash', 0), (int, float)) else 0.0 # 确保现金是浮点数
         if total_cost > current_cash:
             print("资金不足")
             return
@@ -440,13 +462,13 @@ class StockTycoon:
         # 计算收益
         total_income = bond.current_price * sell_amount
         profit_loss = (bond.current_price - avg_price) * sell_amount # 计算盈亏
-        self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income # 确保现金是浮点数
+        self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income if isinstance(self.player.get("cash", 0), (int, float)) else total_income # 确保现金是浮点数
 
         # 更新持仓
         new_holding_amount = current_amount - sell_amount
         if new_holding_amount <= 0.0: # 使用<=0.0处理浮点误差
             del bonds[code]
-        else:
+                else:
             # 只更新数量，平均成本价不变
             holding_data["amount"] = new_holding_amount
             bonds[code] = holding_data # 更新剩余数量 (浮点)
@@ -463,7 +485,7 @@ class StockTycoon:
             "amount": int(sell_amount), # 操作记录数量保存为整数
             "price": bond.current_price
         })
-        self.record_trade("债券", code, "卖出", amount, bond.current_price) # 交易记录数量保存为浮点数
+        self.record_trade("债券", code, "卖出", sell_amount, bond.current_price) # 交易记录数量保存为浮点数
         self.save_game()
 
     def short_stock(self):
@@ -478,8 +500,8 @@ class StockTycoon:
         """显示玩家投资组合（增加做空仓位显示）"""
         print(f"{Fore.CYAN}=== 我的持仓 ==={Style.RESET_ALL}")
         # 确保从player字典获取的值是数字类型，默认为0.0
-        cash = float(self.player.get('cash', 0.0))
-        debt = float(self.player.get('debt', 0.0))
+        cash = float(self.player.get('cash', 0.0)) if isinstance(self.player.get('cash', 0), (int, float)) else 0.0
+        debt = float(self.player.get('debt', 0.0)) if isinstance(self.player.get('debt', 0), (int, float)) else 0.0
 
         print(f"现金：{cash:.2f}元") # 格式化为2位小数
         print(f"债务：{debt:.2f}元") # 格式化为2位小数
@@ -747,7 +769,7 @@ class StockTycoon:
         # 买入逻辑
         if action == "1":
             total_cost = stock.current_price * amount
-            current_cash = float(self.player.get("cash", 0.0)) # 确保现金是浮点数
+            current_cash = float(self.player.get("cash", 0.0)) if isinstance(self.player.get("cash", 0), (int, float)) else 0.0 # 确保现金是浮点数
             if total_cost > current_cash:
                 print(f"{Fore.RED}错误：资金不足，需要{total_cost:.2f}元{Style.RESET_ALL}") # 使用.2f格式化金额
             else:
@@ -766,8 +788,8 @@ class StockTycoon:
                     "price": stock.current_price
                 })
                 self.record_trade("股票", code, "买入", amount, stock.current_price) # 交易记录数量保存为浮点数
-                self.save_game()
-
+                            self.save_game()
+                        
         # 卖出逻辑
         elif action == "2":
             stocks = self.player.get("stocks", {})
@@ -785,7 +807,7 @@ class StockTycoon:
             avg_price = float(stocks[code].get("avg_price", 0.0)) if isinstance(stocks.get(code), dict) and "avg_price" in stocks.get(code) else 0.0
             profit_loss = (stock.current_price - avg_price) * amount # 计算盈亏
 
-            self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income # 确保现金是浮点数
+            self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income if isinstance(self.player.get("cash", 0), (int, float)) else total_income # 确保现金是浮点数
 
             # 更新持仓数量，平均成本价不变
             if isinstance(stocks, dict):
@@ -823,7 +845,7 @@ class StockTycoon:
              # amount变量已经在try块外初始化并获取
              # 计算保证金（假设50%保证金率），确保浮点数运算
              margin_required = stock.current_price * amount * 0.5
-             current_cash = float(self.player.get("cash", 0.0)) # 确保现金是浮点数
+             current_cash = float(self.player.get("cash", 0.0)) if isinstance(self.player.get("cash", 0), (int, float)) else 0.0 # 确保现金是浮点数
              if current_cash < margin_required:
                  print(f"{Fore.RED}错误：保证金不足，需要{margin_required:.2f}元{Style.RESET_ALL}") # 格式化保证金
                  return
@@ -887,7 +909,7 @@ class StockTycoon:
 
              # 计算买回成本，确保浮点数运算
              buyback_cost = stock.current_price * amount_to_cover
-             current_cash = float(self.player.get("cash", 0.0)) # 确保现金是浮点数
+             current_cash = float(self.player.get("cash", 0.0)) if isinstance(self.player.get("cash", 0), (int, float)) else 0.0 # 确保现金是浮点数
              if current_cash < buyback_cost:
                  print(f"{Fore.RED}错误：现金不足，需要{buyback_cost:.2f}元{Style.RESET_ALL}") # 格式化成本
                  return
@@ -1029,17 +1051,405 @@ class StockTycoon:
         }
         self.trade_history.append(record)
 
+    def screen_good_investments(self):
+        """自动筛选近指定天数内势头很猛的股票和债券"""
+        print(f"{Fore.CYAN}=== 自动筛选好投资 ==={Style.RESET_ALL}")
+        try:
+            days = int(input("请输入筛选天数："))
+            if days <= 0:
+                print("天数必须大于0")
+                return
+        except ValueError:
+            print("无效输入，天数必须是整数")
+            return
+        
+        # 筛选股票
+        print(f"\n{Fore.YELLOW}股票筛选结果（近{days}天涨幅）：{Style.RESET_ALL}")
+        stock_results = []
+        for stock in self.market.stocks:
+            if len(stock.history) >= days:
+                recent_history = stock.history[-days:]
+                start_price = float(recent_history[0].get("price", 0.0))
+                end_price = float(recent_history[-1].get("price", 0.0))
+                if start_price > 0:
+                    percentage_change = (end_price - start_price) / start_price * 100
+                    stock_results.append((stock, percentage_change))
+        
+        # 按涨幅排序并显示前3名
+        stock_results.sort(key=lambda x: x[1], reverse=True)
+        for idx, (stock, change) in enumerate(stock_results[:3], 1):
+            color = Fore.GREEN if change > 0 else (Fore.RED if change < 0 else Style.RESET_ALL)
+            print(f"{idx}. {stock.code} - {stock.name}: {color}{change:.2f}%{Style.RESET_ALL}")
+        if not stock_results:
+            print("暂无足够历史数据的股票")
+        
+        # 筛选债券
+        print(f"\n{Fore.YELLOW}债券筛选结果（近{days}天涨幅）：{Style.RESET_ALL}")
+        bond_results = []
+        for bond in self.market.bonds:
+            if len(bond.history) >= days:
+                recent_history = bond.history[-days:]
+                start_price = float(recent_history[0].get("price", 0.0))
+                end_price = float(recent_history[-1].get("price", 0.0))
+                if start_price > 0:
+                    percentage_change = (end_price - start_price) / start_price * 100
+                    bond_results.append((bond, percentage_change))
+        
+        # 按涨幅排序并显示前2名
+        bond_results.sort(key=lambda x: x[1], reverse=True)
+        for idx, (bond, change) in enumerate(bond_results[:2], 1):
+            color = Fore.GREEN if change > 0 else (Fore.RED if change < 0 else Style.RESET_ALL)
+            print(f"{idx}. {bond.code} - {bond.name}: {color}{change:.2f}%{Style.RESET_ALL}")
+        if not bond_results:
+            print("暂无足够历史数据的债券")
+        
+        # 询问用户是否查看详情
+        choice = input("\n是否查看具体详情？(y/n)：").lower()
+        if choice == 'y':
+            code = input("请输入资产代码：").upper()
+            asset = self.market.stock_dict.get(code) or self.market.bond_dict.get(code)
+            if asset:
+                # 显示价格走势
+                print(f"\n{Fore.YELLOW}{asset.name} ({code}) 价格走势：{Style.RESET_ALL}")
+                self.show_horizontal_chart_for_asset(asset)
+                # 询问是否购买
+                buy_choice = input("是否购买该资产？(y/n)：").lower()
+                if buy_choice == 'y':
+                    if asset in self.market.stocks:
+                        self.bulk_stock_trade_for_asset(asset)
+                    elif asset in self.market.bonds:
+                        self.buy_bonds_for_asset(asset)
+            else:
+                print("无效的资产代码")
+
+    def show_horizontal_chart_for_asset(self, asset):
+        """为特定资产显示水平走势图"""
+        print(f"\n=== {asset.name} 价格走势分析 ===")
+        if not asset.history:
+            print("没有历史数据")
+            return
+
+        # 动态终端适配
+        term_width, _ = shutil.get_terminal_size()
+        max_bar_width = max(30, term_width - 35)  # 为价格标签留出空间
+        max_days_to_show = min(len(asset.history), max_bar_width)
+
+        # 获取历史数据
+        history_to_show = asset.history[-max_days_to_show:]
+        day_count = len(history_to_show)
+        start_day_display = self.day - day_count + 1
+
+        # 计算显示参数
+        prices_to_show = [float(entry["price"]) for entry in history_to_show if isinstance(entry.get("price"), (int, float))]
+        if not prices_to_show:
+            print("历史价格数据格式错误")
+            return
+
+        min_price = min(prices_to_show) if prices_to_show else 0.0
+        max_price = max(prices_to_show) if prices_to_show else (min_price + 1.0)
+        price_range = max(max_price - min_price, 1.0)
+
+        # 打印头部信息
+        print(f"\n{asset.name} ({asset.code}) 近期价格走势".center(term_width))
+        print(f"当前第 {self.day} 天 | 显示最近 {day_count} 个交易日".center(term_width))
+        print(f"历史价格范围：{min_price:.2f}元 ~ {max_price:.2f}元".center(term_width))
+
+        # 绘制走势图
+        for idx in range(day_count):
+            current_entry = history_to_show[idx]
+            current_price = float(current_entry.get("price", 0.0)) if isinstance(current_entry.get("price"), (int, float)) else 0.0
+            prev_price = float(history_to_show[idx-1].get("price", 0.0)) if idx > 0 and isinstance(history_to_show[idx-1].get("price"), (int, float)) else current_price
+
+            norm_val = (current_price - min_price) / price_range if price_range > 0 else 0.0
+            bar_width = max(1, int(norm_val * max_bar_width))
+
+            color = Style.RESET_ALL
+            if idx > 0:
+                if current_price > prev_price:
+                    color = Fore.GREEN
+                elif current_price < prev_price:
+                    color = Fore.RED
+
+            bar = f"{color}{'█' * bar_width}"
+            price_label = f"{Style.RESET_ALL}{current_price:,.2f}元".replace(",", "_").rjust(12)
+            day_label = f" (第{start_day_display + idx}天)" if idx % 5 == 0 or idx == day_count-1 else ""
+
+            line = f"{bar}{price_label}{day_label}"
+            print(line.ljust(term_width))
+
+        # 图例说明
+        print(f"\n{Fore.YELLOW}图例说明：{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}███绿色：当日价格上涨{Style.RESET_ALL}")
+        print(f"{Fore.RED}███红色：当日价格下跌{Style.RESET_ALL}")
+        print("███白色：当日价格无变化或首日")
+        print("柱状长度反映相对价格区间，非绝对涨跌幅")
+        print("（注意：由于终端字符限制，图表精度有限）")
+
+    def bulk_stock_trade_for_asset(self, stock):
+        """为特定股票执行交易"""
+        print(f"\n{Fore.CYAN}=== 股票交易 - {stock.name} ==={Style.RESET_ALL}")
+        action = input("请选择操作 (1.买入 / 2.卖出 / 3.做空 / 4.平仓做空): ")
+
+        amount = 0.0
+        if action in ["1", "2", "3"]:
+            try:
+                amount = int(input(f"操作数量（当前价：{stock.current_price:.2f}元/股）："))
+                if amount <= 0:
+                    raise ValueError("数量必须为正整数")
+                amount = float(amount)
+            except ValueError as e:
+                print(f"{Fore.RED}错误：{e}{Style.RESET_ALL}")
+                return
+
+        if action == "1":
+            total_cost = stock.current_price * amount
+            current_cash = float(self.player.get("cash", 0.0)) if isinstance(self.player.get("cash", 0), (int, float)) else 0.0
+            if total_cost > current_cash:
+                print(f"{Fore.RED}错误：资金不足，需要{total_cost:.2f}元{Style.RESET_ALL}")
+            else:
+                self.player["cash"] = current_cash - total_cost
+                stocks = self.player.get("stocks", {})
+                if isinstance(stocks, dict):
+                    current_holding = float(stocks.get(stock.code, {}).get("amount", 0.0)) if isinstance(stocks.get(stock.code), dict) else 0.0
+                    stocks[stock.code] = {"amount": current_holding + amount, "avg_price": float(stocks.get(stock.code, {}).get("avg_price", stock.current_price))}
+                    self.player["stocks"] = stocks
+                print(f"{Fore.GREEN}成功买入 {int(amount)} 股 {stock.name}{Style.RESET_ALL}")
+                stock.operation_history.append({
+                    "day": self.day,
+                    "action": "买入",
+                    "amount": int(amount),
+                    "price": stock.current_price
+                })
+                self.record_trade("股票", stock.code, "买入", amount, stock.current_price)
+                self.save_game()
+        elif action == "2":
+            stocks = self.player.get("stocks", {})
+            current_holding = float(stocks.get(stock.code, {}).get("amount", 0.0)) if isinstance(stocks, dict) else 0.0
+            if current_holding < amount:
+                print(f"{Fore.RED}错误：持仓不足，当前持有 {int(current_holding)} 股{Style.RESET_ALL}")
+                return
+
+            total_income = stock.current_price * amount
+            avg_price = float(stocks[stock.code].get("avg_price", 0.0)) if isinstance(stocks.get(stock.code), dict) and "avg_price" in stocks.get(stock.code) else 0.0
+            profit_loss = (stock.current_price - avg_price) * amount
+
+            self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income if isinstance(self.player.get("cash", 0), (int, float)) else total_income
+
+            if isinstance(stocks, dict):
+                holding_data = stocks.get(stock.code)
+                if isinstance(holding_data, dict) and "amount" in holding_data:
+                    new_holding_amount = float(holding_data["amount"]) - amount
+                    if new_holding_amount <= 0.0:
+                        if stock.code in stocks:
+                            del stocks[stock.code]
+                    else:
+                        holding_data["amount"] = new_holding_amount
+                        stocks[stock.code] = holding_data
+                else:
+                    print(f"{Fore.RED}内部错误：卖出时获取持仓数据异常 for {stock.code}{Style.RESET_ALL}")
+                    return
+                self.player["stocks"] = stocks
+
+            print(f"{Fore.GREEN}成功卖出 {int(amount)} 股 {stock.name}，获得{total_income:.2f}元{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}本次交易盈亏：{profit_loss:.2f}元{Style.RESET_ALL}")
+
+            stock.operation_history.append({
+                "day": self.day,
+                "action": "卖出",
+                "amount": int(amount),
+                "price": stock.current_price
+            })
+            self.record_trade("股票", stock.code, "卖出", amount, stock.current_price)
+            self.save_game()
+        elif action == "3":
+            margin_required = stock.current_price * amount * 0.5
+            current_cash = float(self.player.get("cash", 0.0)) if isinstance(self.player.get("cash", 0), (int, float)) else 0.0
+            if current_cash < margin_required:
+                print(f"{Fore.RED}错误：保证金不足，需要{margin_required:.2f}元{Style.RESET_ALL}")
+                return
+
+            shorts = self.player.get("shorts", {})
+            if not isinstance(shorts, dict):
+                shorts = {}
+
+            if stock.code in shorts and isinstance(shorts[stock.code], list) and len(shorts[stock.code]) >= 3:
+                existing_amount = float(shorts[stock.code][0])
+                existing_borrow_price = float(shorts[stock.code][1])
+                new_total_amount = existing_amount + amount
+                new_borrow_price = ((existing_borrow_price * existing_amount) + (stock.current_price * amount)) / new_total_amount if new_total_amount > 0 else 0.0
+                shorts[stock.code] = [new_total_amount, new_borrow_price, self.day]
+            else:
+                shorts[stock.code] = [float(amount), float(stock.current_price), self.day]
+
+            self.player["cash"] = current_cash + stock.current_price * amount - margin_required
+            self.player["shorts"] = shorts
+
+            print(f"{Fore.GREEN}成功做空 {int(amount)} 股 {stock.name}，保证金已扣除{margin_required:.2f}元{Style.RESET_ALL}")
+            stock.operation_history.append({
+                "day": self.day,
+                "action": "做空",
+                "amount": int(amount),
+                "price": stock.current_price
+            })
+            self.record_trade("股票", stock.code, "做空", amount, stock.current_price)
+            self.save_game()
+        elif action == "4":
+            amount_to_cover = 0.0
+            try:
+                shorts = self.player.get("shorts", {})
+                if not isinstance(shorts, dict) or stock.code not in shorts or not isinstance(shorts[stock.code], list) or len(shorts[stock.code]) < 3:
+                    print(f"{Fore.RED}错误：没有该股票的做空仓位或数据异常{Style.RESET_ALL}")
+                    return
+                current_short_amount = float(shorts[stock.code][0]) if isinstance(shorts[stock.code][0], (int, float)) else 0.0
+
+                amount_to_cover = int(input(f"平仓数量（当前做空：{int(current_short_amount)}股）："))
+                if amount_to_cover <= 0 or amount_to_cover > current_short_amount:
+                    print(f"{Fore.RED}错误：无效或超过做空数量{Style.RESET_ALL}")
+                    return
+                amount_to_cover = float(amount_to_cover)
+            except ValueError as e:
+                print(f"{Fore.RED}错误：{e}{Style.RESET_ALL}")
+                return
+
+            short_data = shorts[stock.code]
+            borrow_price = float(short_data[1])
+            original_short_amount = float(short_data[0])
+
+            buyback_cost = stock.current_price * amount_to_cover
+            current_cash = float(self.player.get("cash", 0.0)) if isinstance(self.player.get("cash", 0), (int, float)) else 0.0
+            if current_cash < buyback_cost:
+                print(f"{Fore.RED}错误：现金不足，需要{buyback_cost:.2f}元{Style.RESET_ALL}")
+                return
+
+            profit_per_share = borrow_price - stock.current_price
+            total_profit = profit_per_share * amount_to_cover
+
+            returned_margin = (amount_to_cover / original_short_amount) * (borrow_price * original_short_amount * 0.5) if original_short_amount > 0 else 0.0
+            self.player["cash"] = current_cash + total_profit + returned_margin
+
+            short_data[0] = original_short_amount - amount_to_cover
+            if short_data[0] <= 0.0:
+                del shorts[stock.code]
+            else:
+                shorts[stock.code] = short_data
+
+            self.player["shorts"] = shorts
+            print(f"{Fore.GREEN}平仓 {int(amount_to_cover)} 股成功，净盈亏：{total_profit:.2f}元{Style.RESET_ALL}")
+            stock.operation_history.append({
+                "day": self.day,
+                "action": "平仓",
+                "amount": int(amount_to_cover),
+                "price": stock.current_price
+            })
+            self.record_trade("股票", stock.code, "平仓做空", amount_to_cover, stock.current_price)
+            self.save_game()
+        else:
+            print(f"{Fore.RED}错误：无效的操作选择{Style.RESET_ALL}")
+            return
+
+    def buy_bonds_for_asset(self, bond):
+        """为特定债券执行购买"""
+        print(f"\n{Fore.CYAN}=== 债券购买 - {bond.name} ==={Style.RESET_ALL}")
+        try:
+            amount = int(input("请输入购买数量："))
+            if amount <= 0:
+                raise ValueError("数量必须大于0")
+            amount = float(amount)
+        except ValueError:
+            print("无效的数量")
+            return
+
+        total_cost = bond.current_price * amount
+        current_cash = float(self.player.get('cash', 0.0)) if isinstance(self.player.get('cash', 0), (int, float)) else 0.0
+        if total_cost > current_cash:
+            print("资金不足")
+            return
+
+        self.player['cash'] = current_cash - total_cost
+        bonds = self.player.get('bonds', {})
+        if not isinstance(bonds, dict):
+            bonds = {}
+
+        if bond.code in bonds:
+            existing_amount = float(bonds[bond.code].get("amount", 0.0))
+            existing_avg_price = float(bonds[bond.code].get("avg_price", 0.0))
+            new_total_amount = existing_amount + amount
+            new_avg_price = ((existing_avg_price * existing_amount) + (bond.current_price * amount)) / new_total_amount if new_total_amount > 0 else 0.0
+            bonds[bond.code] = {"amount": new_total_amount, "avg_price": new_avg_price}
+        else:
+            bonds[bond.code] = {"amount": amount, "avg_price": bond.current_price}
+
+        self.player['bonds'] = bonds
+
+        print(f"成功购买 {int(amount)} 单位 {bond.name}")
+        bond.operation_history.append({
+            "day": self.day,
+            "action": "买入",
+            "amount": int(amount),
+            "price": bond.current_price
+        })
+        self.record_trade("债券", bond.code, "买入", amount, bond.current_price)
+        self.save_game()
+
 # ========== 主菜单 ==========
 def main_menu(game):
     while True:
+        print("")
+        print(f"{Fore.CYAN}=== 主菜单 ==={Style.RESET_ALL}")
         # 确保 player['cash'] 和 player['debt'] 是数字，并格式化为元
         cash_display = float(game.player.get('cash', 0.0))
-        debt_display = float(game.player.get('debt', 0.0))
-        total_assets_display = float(game.calculate_total_assets())
-
-        print(f"\n{Fore.CYAN}=== 主菜单 ==={Style.RESET_ALL}")
-        print(f"现金：{cash_display:.2f}元")
-        print(f"债务：{debt_display:.2f}元")
+        # 计算股票和债券的总价值，并显示详细拆分
+        stocks_total_value = 0.0
+        stocks_profit_loss = 0.0
+        stocks_dict = game.player.get('stocks', {})
+        stocks_breakdown = []
+        if isinstance(stocks_dict, dict):
+            for code, holding_data in stocks_dict.items():
+                if isinstance(holding_data, dict) and isinstance(holding_data.get("amount"), (int, float)):
+                    stock = game.market.stock_dict.get(code)
+                    if stock:
+                        value = float(stock.current_price) * float(holding_data["amount"])
+                        profit_loss = (float(stock.current_price) - float(holding_data.get("avg_price", 0.0))) * float(holding_data["amount"])
+                        stocks_total_value += value
+                        stocks_profit_loss += profit_loss
+                        stocks_breakdown.append(f"{value:.2f}")
+        bonds_total_value = 0.0
+        bonds_profit_loss = 0.0
+        bonds_dict = game.player.get('bonds', {})
+        bonds_breakdown = []
+        if isinstance(bonds_dict, dict):
+            for code, holding_data in bonds_dict.items():
+                if isinstance(holding_data, dict) and isinstance(holding_data.get("amount"), (int, float)):
+                    bond = game.market.bond_dict.get(code)
+                    if bond:
+                        value = float(bond.current_price) * float(holding_data["amount"])
+                        profit_loss = (float(bond.current_price) - float(holding_data.get("avg_price", 0.0))) * float(holding_data["amount"])
+                        bonds_total_value += value
+                        bonds_profit_loss += profit_loss
+                        bonds_breakdown.append(f"{value:.2f}")
+        stocks_bonds_total_value = stocks_total_value + bonds_total_value
+        stocks_breakdown_str = '+'.join(stocks_breakdown) if stocks_breakdown else '0.00'
+        bonds_breakdown_str = '+'.join(bonds_breakdown) if bonds_breakdown else '0.00'
+        print(f"股票总价值：{stocks_breakdown_str}={stocks_total_value:.2f}元")
+        stocks_color = Fore.GREEN if stocks_profit_loss > 0 else (Fore.RED if stocks_profit_loss < 0 else Style.RESET_ALL)
+        print(f"股票盈亏：{stocks_color}{stocks_profit_loss:.2f}元{Style.RESET_ALL}")
+        print(f"债券总价值：{bonds_breakdown_str}={bonds_total_value:.2f}元")
+        bonds_color = Fore.GREEN if bonds_profit_loss > 0 else (Fore.RED if bonds_profit_loss < 0 else Style.RESET_ALL)
+        print(f"债券盈亏：{bonds_color}{bonds_profit_loss:.2f}元{Style.RESET_ALL}")
+        total_profit_loss = stocks_profit_loss + bonds_profit_loss
+        total_color = Fore.GREEN if total_profit_loss > 0 else (Fore.RED if total_profit_loss < 0 else Style.RESET_ALL)
+        print(f"总盈亏：{total_color}{total_profit_loss:.2f}元{Style.RESET_ALL}")
+        print(f"股票+债券总价值：{stocks_total_value:.2f}+{bonds_total_value:.2f}={stocks_bonds_total_value:.2f}元", end="")
+        # 计算与昨天的盈亏对比
+        if game.stocks_bonds_value_history and len(game.stocks_bonds_value_history) > 1:
+            yesterday_value = float(game.stocks_bonds_value_history[-2]) if len(game.stocks_bonds_value_history) >= 2 and isinstance(game.stocks_bonds_value_history[-2], (int, float)) else 0.0
+            today_value = float(game.stocks_bonds_value_history[-1]) if game.stocks_bonds_value_history and isinstance(game.stocks_bonds_value_history[-1], (int, float)) else stocks_bonds_total_value
+            profit_loss = today_value - yesterday_value
+            color = Fore.GREEN if profit_loss > 0 else (Fore.RED if profit_loss < 0 else Style.RESET_ALL)
+            print(f"")
+        else:
+            print("")  # 如果没有历史数据，则换行
+        total_assets_display = cash_display + stocks_bonds_total_value
         print(f"总资产：{total_assets_display:.2f}元")
         print(f"游戏天数：{game.day}")
 
@@ -1049,7 +1459,9 @@ def main_menu(game):
         print("4. 进入下一天")
         print("5. 查看交易历史")
         print("6. 查看资产价格走势图")
-        print("7. 保存退出")
+        print("7. 自动筛选好投资")
+        print("8. 存档管理")
+        print("9. 保存并退出")
 
         choice = input("请选择操作：")
 
@@ -1066,17 +1478,195 @@ def main_menu(game):
             game.show_portfolio()
         elif choice == "4":
             game.daily_update()
+            # 在每日更新后保存股票和债券总价值的历史记录
+            stocks_bonds_total_value = 0.0
+            stocks_dict = game.player.get('stocks', {})
+            if isinstance(stocks_dict, dict):
+                for code, holding_data in stocks_dict.items():
+                    if isinstance(holding_data, dict) and isinstance(holding_data.get("amount"), (int, float)):
+                        stock = game.market.stock_dict.get(code)
+                        if stock:
+                            stocks_bonds_total_value += float(stock.current_price) * float(holding_data["amount"])
+            bonds_dict = game.player.get('bonds', {})
+            if isinstance(bonds_dict, dict):
+                for code, holding_data in bonds_dict.items():
+                    if isinstance(holding_data, dict) and isinstance(holding_data.get("amount"), (int, float)):
+                        bond = game.market.bond_dict.get(code)
+                        if bond:
+                            stocks_bonds_total_value += float(bond.current_price) * float(holding_data["amount"])
+            game.stocks_bonds_value_history.append(stocks_bonds_total_value)
+            if len(game.stocks_bonds_value_history) > 365:  # 保留一年数据
+                game.stocks_bonds_value_history.pop(0)
+            game.save_game()
         elif choice == "5":
             game.show_trade_history()
         elif choice == "6":
+            # 在显示走势图前列出资产列表
+            print(f"\n{Fore.YELLOW}=== 可查看资产列表 ==={Style.RESET_ALL}")
+            print(f"{Fore.CYAN}--- 股票 ---{Style.RESET_ALL}")
+            for stock in game.market.stocks:
+                print(f"  {stock.code}: {stock.name}")
+            print(f"{Fore.CYAN}--- 债券 ---{Style.RESET_ALL}")
+            for bond in game.market.bonds:
+                print(f"  {bond.code}: {bond.name}")
+            print("-" * 30)
             game.show_horizontal_chart()
         elif choice == "7":
+            game.screen_good_investments()  # 确保正确调用筛选功能
+        elif choice == "8":
+            manage_saves(game)
+        elif choice == "9":
             game.save_game()
-            print("游戏已保存，再见！")
+            print(f"{Fore.GREEN}游戏已保存，再见！{Style.RESET_ALL}")
             break
         else:
             print("无效输入！")
 
+def select_save():
+    """启动时选择存档"""
+    if not os.path.exists('saves'):
+        os.makedirs('saves')
+    
+    save_files = [f for f in os.listdir('saves') if f.endswith('.json')]
+    print(f"\n{Fore.CYAN}=== 存档选择 ==={Style.RESET_ALL}")
+    
+    if not save_files:
+        print("暂无存档，创建新存档")
+        while True:
+            new_name = input("请输入新存档名称（无需扩展名）: ").strip()
+            if new_name:
+                return f"{new_name}.json"
+            print("名称不能为空")
+    
+    print("请选择存档：")
+    for idx, save in enumerate(save_files):
+        print(f"{idx+1}. {save}")
+    print(f"{len(save_files)+1}. 新建存档")
+    
+    while True:
+        choice = input("请输入选择（数字）: ").strip()
+        if choice.isdigit():
+            choice = int(choice)
+            if 1 <= choice <= len(save_files):
+                return save_files[choice-1]
+            elif choice == len(save_files)+1:
+                while True:
+                    new_name = input("请输入新存档名称（无需扩展名）: ").strip()
+                    if new_name:
+                        return f"{new_name}.json"
+                    print("名称不能为空")
+        print("输入无效，请重新输入")
+
+def manage_saves(game):
+    """存档管理子菜单"""
+    while True:
+        print(f"\n{Fore.CYAN}=== 存档管理 ==={Style.RESET_ALL}")
+        print("1. 保存当前进度")
+        print("2. 另存为新存档")
+        print("3. 加载其他存档")
+        print("4. 删除存档")
+        print("5. 返回主菜单")
+        choice = input("请选择操作：")
+        
+        if choice == '1':
+            game.save_game()
+            print(f"{Fore.GREEN}当前进度已保存至 {game.current_save}{Style.RESET_ALL}")
+        
+        elif choice == '2':
+            new_name = input("请输入新存档名称（无需扩展名）: ").strip()
+            if new_name:
+                new_save = f"{new_name}.json"
+                old_save = game.current_save
+                
+                # 保存到新存档
+                game.current_save = new_save
+                game.save_game()
+                
+                # 询问是否切换
+                switch = input(f"是否切换到新存档 {new_save}？(y/n): ").lower()
+                if switch == 'y':
+                    print(f"{Fore.GREEN}已切换到 {new_save}{Style.RESET_ALL}")
+                else:
+                    game.current_save = old_save
+                continue
+            print(f"{Fore.RED}无效的存档名称{Style.RESET_ALL}")
+        
+        elif choice == '3':
+            saves = [f for f in os.listdir('saves') if f.endswith('.json')]
+            if not saves:
+                print(f"{Fore.YELLOW}暂无其他存档{Style.RESET_ALL}")
+                continue
+            
+            print(f"\n{Fore.CYAN}=== 可用存档 ==={Style.RESET_ALL}")
+            for idx, save in enumerate(saves):
+                print(f"{idx+1}. {save}")
+            print("0. 取消")
+            
+            load_choice = input("请选择要加载的存档（数字）: ").strip()
+            if load_choice == '0':
+                continue
+            if not load_choice.isdigit():
+                print(f"{Fore.RED}请输入数字{Style.RESET_ALL}")
+                continue
+            
+            load_choice = int(load_choice)
+            if 1 <= load_choice <= len(saves):
+                selected = saves[load_choice-1]
+                
+                # 保存当前进度
+                save_current = input("是否先保存当前进度？(y/n): ").lower()
+                if save_current == 'y':
+                    game.save_game()
+                
+                # 加载新存档
+                game.current_save = selected
+                game.load_game()
+                print(f"{Fore.GREEN}已加载存档 {selected}{Style.RESET_ALL}")
+                return  # 返回主菜单刷新数据
+            print(f"{Fore.RED}无效的选择{Style.RESET_ALL}")
+        
+        elif choice == '4':
+            saves = [f for f in os.listdir('saves') if f.endswith('.json')]
+            if not saves:
+                print(f"{Fore.YELLOW}暂无存档可删除{Style.RESET_ALL}")
+                continue
+            
+            print(f"\n{Fore.CYAN}=== 删除存档 ==={Style.RESET_ALL}")
+            for idx, save in enumerate(saves):
+                print(f"{idx+1}. {save}")
+            print("0. 取消")
+            
+            del_choice = input("请选择要删除的存档（数字）: ").strip()
+            if del_choice == '0':
+                continue
+            if not del_choice.isdigit():
+                print(f"{Fore.RED}请输入数字{Style.RESET_ALL}")
+                continue
+            
+            del_choice = int(del_choice)
+            if 1 <= del_choice <= len(saves):
+                selected = saves[del_choice-1]
+                confirm = input(f"确认删除存档 {selected}？此操作不可恢复！(y/n): ").lower()
+                if confirm == 'y':
+                    try:
+                        os.remove(os.path.join('saves', selected))
+                        print(f"{Fore.GREEN}存档 {selected} 已删除{Style.RESET_ALL}")
+                        # 如果删除的是当前存档，重置为默认存档
+                        if selected == game.current_save:
+                            game.current_save = 'default_save.json'
+                            print(f"{Fore.YELLOW}当前存档已重置为默认存档{Style.RESET_ALL}")
+                    except Exception as e:
+                        print(f"{Fore.RED}删除失败：{str(e)}{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}无效的选择{Style.RESET_ALL}")
+        
+        elif choice == '5':
+            return
+        
+        else:
+            print(f"{Fore.RED}无效的输入{Style.RESET_ALL}")
+
 if __name__ == "__main__":
-    game = StockTycoon()
+    save_file = select_save()
+    game = StockTycoon(save_file)
     main_menu(game)
