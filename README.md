@@ -72,9 +72,10 @@ Rainbow 模拟投资是一款基于命令行的金融模拟游戏，玩家可以
 
 Rainbow/
 ├── main.py # 主程序
-├── saves/ # 存档目录
-└── README.md # 说明文档
-└── LICENSE # Apache 2.0 License
+├── README.md # 说明文档
+├── requirements.txt # 依赖
+├── LICENSE # Apache 2.0 License
+└── saves/ # 存档目录
 
 ### 扩展建议
 
@@ -95,7 +96,7 @@ Copyright (c) 2025 CExnlh
 
 ## 联系方式
 
-作者：Robo Siya 
+作者：Robo Siya
 邮箱：robosiya@cexnlh.dpdns.org
-Session:05ebbe601eba90618689e9aba924eaa55025f5e32c5eb172086492cc56a51b432d
+Session ID:05ebbe601eba90618689e9aba924eaa55025f5e32c5eb172086492cc56a51b432d
 项目地址：https://github.com/CExnlh/Rainbow
