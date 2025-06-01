@@ -161,23 +161,39 @@ class FinancialMarket:
 # ========== 核心游戏类 ==========
 class StockTycoon:
     def __init__(self, save_name='default_save.json'):
-        self.current_save = save_name  # 新增当前存档属性
+        self.current_save = save_name
         self.player = {
-            "cash": 10_000_000_000_000.0, # 初始现金为浮点数
-            "debt": 1_000_000_000_000.0, # 初始债务为浮点数
-            "stocks": {}, # 正常持仓 {代码: 数量}
-            "bonds": {},      # 债券持仓 {代码: 数量}
-            "shorts": {}      # 做空持仓 {代码: [数量, 借入价格(浮点), 借入天数(int)]}
+            "cash": 10_000_000_000_000.0,
+            "debt": 1_000_000_000_000.0,
+            "stocks": {},
+            "bonds": {},
+            "shorts": {},
+            "level": 1,  # 新增等级属性
+            "exp": 0,    # 新增经验属性
+            "exp_to_next_level": 100  # 升级所需经验
         }
         self.market = FinancialMarket()
         self.season = SeasonSystem()
-        self.day = 0 # 游戏天数从0开始
-        self.total_assets_history = [] # 列表存储每日总资产 (浮点)
-        self.trade_history = [] # 新增交易历史记录列表
-        self.stocks_bonds_value_history = [] # 新增股票+债券总价值历史记录列表
-        self.load_game()  # 加载当前存档
-        # 确保市场初始数据与当前游戏天数同步
+        self.day = 0
+        self.total_assets_history = []
+        self.trade_history = []
+        self.stocks_bonds_value_history = []
+        self.tycoon_mode = False
+        self.load_game()
         self.market.set_day(self.day)
+
+    def toggle_tycoon_mode(self):
+        """切换土豪模式状态"""
+        self.tycoon_mode = not self.tycoon_mode
+        print(f"土豪模式已{'开启' if self.tycoon_mode else '关闭'}")
+        self.save_game()
+
+    def validate_tycoon_purchase(self, amount):
+        """验证土豪模式下的购买数量"""
+        if self.tycoon_mode and amount < 1000:
+            print(f"{Fore.RED}土豪模式下必须购买1000股或以上！{Style.RESET_ALL}")
+            return False
+        return True
 
     def load_game(self):
         """根据当前存档名称加载游戏"""
@@ -185,9 +201,13 @@ class StockTycoon:
         try:
             with open(filepath, 'r') as f:
                 data = json.load(f)
-                # 加载基础数据，确保数字类型正确
+                # 加载基础数据
                 self.player["cash"] = float(data.get("player", {}).get("cash", self.player["cash"])) if isinstance(data.get("player", {}).get("cash", self.player["cash"]), (int, float)) else 0.0
                 self.player["debt"] = float(data.get("player", {}).get("debt", self.player["debt"])) if isinstance(data.get("player", {}).get("debt", self.player["debt"]), (int, float)) else 0.0
+                # 加载等级和经验
+                self.player["level"] = int(data.get("player", {}).get("level", 1))
+                self.player["exp"] = int(data.get("player", {}).get("exp", 0))
+                self.player["exp_to_next_level"] = int(data.get("player", {}).get("exp_to_next_level", 100))
                 # 持仓信息，确保是字典，并加载包含平均成本的数据结构
                 loaded_stocks = data.get("player", {}).get("stocks", {})
                 if isinstance(loaded_stocks, dict):
@@ -279,7 +299,16 @@ class StockTycoon:
     def save_game(self):
         """保存到当前存档文件"""
         data = {
-            "player": self.player, # player字典已经包含了cash, debt, stocks, bonds, shorts
+            "player": {
+                "cash": self.player["cash"],
+                "debt": self.player["debt"],
+                "stocks": self.player["stocks"],
+                "bonds": self.player["bonds"],
+                "shorts": self.player["shorts"],
+                "level": self.player["level"],  # 保存等级
+                "exp": self.player["exp"],      # 保存经验
+                "exp_to_next_level": self.player["exp_to_next_level"]  # 保存升级所需经验
+            },
             "day": self.day,
             "trade_history": self.trade_history,
             "total_assets_history": self.total_assets_history, # 保存总资产历史
@@ -317,28 +346,25 @@ class StockTycoon:
     def calculate_total_assets(self):
         """计算玩家总资产"""
         # 确保从player字典获取的值是数字类型，默认为0.0
-        total = float(self.player.get('cash', 0.0)) if isinstance(self.player.get('cash', 0.0), (int, float)) else 0.0
+        cash = self.player.get('cash')
+        total = float(cash) if isinstance(cash, (int, float)) else 0.0
         # 计算股票价值
         stocks_dict = self.player.get('stocks', {})
         # 确保stocks_dict是字典类型，避免.items()错误
         if isinstance(stocks_dict, dict):
-            for code, amount in stocks_dict.items():
-                stock = self.market.stock_dict.get(code)
-                # 确保amount是数字类型，避免乘法错误
-                if stock and isinstance(amount, (int, float)):
-                    total += float(stock.current_price) * float(amount)
+            for code, holding_data in stocks_dict.items():
+                if isinstance(holding_data, dict) and isinstance(holding_data.get("amount"), (int, float)):
+                    stock = self.market.stock_dict.get(code)
+                    if stock:
+                        total += float(stock.current_price) * float(holding_data["amount"])
         # 计算债券价值
         bonds_dict = self.player.get('bonds', {})
-        # 确保bonds_dict是字典类型，避免.items()错误
         if isinstance(bonds_dict, dict):
-            for code, amount in bonds_dict.items():
-                bond = self.market.bond_dict.get(code)
-                 # 确保amount是数字类型，避免乘法错误
-                if bond and isinstance(amount, (int, float)):
-                    total += float(bond.current_price) * float(amount)
-        # TODO: 做空仓位应该计算为负资产或保证金+当前价值差额
-        # 简单的做法是将借入的钱视为债务，平仓时结算盈亏
-        # 这里只计算持有的资产总和
+            for code, holding_data in bonds_dict.items():
+                if isinstance(holding_data, dict) and isinstance(holding_data.get("amount"), (int, float)):
+                    bond = self.market.bond_dict.get(code)
+                    if bond:
+                        total += float(bond.current_price) * float(holding_data["amount"])
         return total
 
     def show_stock_market(self):
@@ -382,45 +408,45 @@ class StockTycoon:
             amount = int(input("请输入购买数量："))
             if amount <= 0:
                 raise ValueError("数量必须大于0")
-            amount = float(amount) # 将数量转换为浮点数
+            amount = float(amount)
+            # 验证土豪模式
+            if not self.validate_tycoon_purchase(amount):
+                return
         except ValueError:
             print("无效的数量")
             return
 
         total_cost = bond.current_price * amount
-        current_cash = float(self.player.get('cash', 0.0)) if isinstance(self.player.get('cash', 0), (int, float)) else 0.0 # 确保现金是浮点数
+        cash = self.player.get('cash')
+        current_cash = float(cash) if isinstance(cash, (int, float)) else 0.0
         if total_cost > current_cash:
             print("资金不足")
             return
 
         self.player['cash'] = current_cash - total_cost
         bonds = self.player.get('bonds', {})
-        if not isinstance(bonds, dict): # 确保bonds是字典
-             bonds = {}
+        if not isinstance(bonds, dict):
+            bonds = {}
 
-        # 更新持仓和平均成本价
-        if code in bonds:
-            existing_amount = float(bonds[code].get("amount", 0.0)) # 确保现有数量是浮点数
-            existing_avg_price = float(bonds[code].get("avg_price", 0.0)) # 确保现有平均价是浮点数
+        if code in bonds and isinstance(bonds[code], dict):
+            existing_amount = float(bonds[code].get("amount", 0.0))
+            existing_avg_price = float(bonds[code].get("avg_price", 0.0))
             new_total_amount = existing_amount + amount
-            # 计算新的加权平均成本价
             new_avg_price = ((existing_avg_price * existing_amount) + (bond.current_price * amount)) / new_total_amount if new_total_amount > 0 else 0.0
             bonds[code] = {"amount": new_total_amount, "avg_price": new_avg_price}
         else:
-            # 新建持仓记录
             bonds[code] = {"amount": amount, "avg_price": bond.current_price}
 
         self.player['bonds'] = bonds
-
-        print(f"成功购买 {int(amount)} 单位 {bond.name}") # 数量显示为整数
-        # 新增操作记录
+        print(f"成功购买 {int(amount)} 单位 {bond.name}")
         bond.operation_history.append({
             "day": self.day,
             "action": "买入",
-            "amount": int(amount), # 操作记录数量保存为整数
+            "amount": int(amount),
             "price": bond.current_price
         })
-        self.record_trade("债券", code, "买入", amount, bond.current_price) # 交易记录数量保存为浮点数
+        self.record_trade("债券", code, "买入", amount, bond.current_price)
+        self.add_exp(10)  # 购买债券增加10点经验
         self.save_game()
 
     def sell_bonds(self):
@@ -462,13 +488,13 @@ class StockTycoon:
         # 计算收益
         total_income = bond.current_price * sell_amount
         profit_loss = (bond.current_price - avg_price) * sell_amount # 计算盈亏
-        self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income if isinstance(self.player.get("cash", 0), (int, float)) else total_income # 确保现金是浮点数
+        self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income if isinstance(self.player.get("cash", 0.0), (int, float)) else total_income # 确保现金是浮点数
 
         # 更新持仓
         new_holding_amount = current_amount - sell_amount
         if new_holding_amount <= 0.0: # 使用<=0.0处理浮点误差
             del bonds[code]
-                else:
+        else:
             # 只更新数量，平均成本价不变
             holding_data["amount"] = new_holding_amount
             bonds[code] = holding_data # 更新剩余数量 (浮点)
@@ -486,6 +512,7 @@ class StockTycoon:
             "price": bond.current_price
         })
         self.record_trade("债券", code, "卖出", sell_amount, bond.current_price) # 交易记录数量保存为浮点数
+        self.add_exp(int(profit_loss / 1000))  # 盈利每1000元增加1点经验
         self.save_game()
 
     def short_stock(self):
@@ -500,8 +527,8 @@ class StockTycoon:
         """显示玩家投资组合（增加做空仓位显示）"""
         print(f"{Fore.CYAN}=== 我的持仓 ==={Style.RESET_ALL}")
         # 确保从player字典获取的值是数字类型，默认为0.0
-        cash = float(self.player.get('cash', 0.0)) if isinstance(self.player.get('cash', 0), (int, float)) else 0.0
-        debt = float(self.player.get('debt', 0.0)) if isinstance(self.player.get('debt', 0), (int, float)) else 0.0
+        cash = float(self.player.get('cash', 0.0)) if isinstance(self.player.get('cash', 0.0), (int, float)) else 0.0
+        debt = float(self.player.get('debt', 0.0)) if isinstance(self.player.get('debt', 0.0), (int, float)) else 0.0
 
         print(f"现金：{cash:.2f}元") # 格式化为2位小数
         print(f"债务：{debt:.2f}元") # 格式化为2位小数
@@ -758,10 +785,13 @@ class StockTycoon:
         # 获取并验证交易数量 (买入、卖出、做空需要数量输入)
         if action in ["1", "2", "3"]:
             try:
-                amount = int(input(f"操作数量（当前价：{stock.current_price:.2f}元/股）：")) # 使用.2f格式化价格
+                amount = int(input(f"操作数量（当前价：{stock.current_price:.2f}元/股）："))
                 if amount <= 0:
                     raise ValueError("数量必须为正整数")
-                amount = float(amount) # 将数量转换为浮点数以便计算
+                amount = float(amount)
+                # 验证土豪模式
+                if action in ["1", "3"] and not self.validate_tycoon_purchase(amount):
+                    return
             except ValueError as e:
                 print(f"{Fore.RED}错误：{e}{Style.RESET_ALL}")
                 return
@@ -788,13 +818,14 @@ class StockTycoon:
                     "price": stock.current_price
                 })
                 self.record_trade("股票", code, "买入", amount, stock.current_price) # 交易记录数量保存为浮点数
-                            self.save_game()
+                self.add_exp(20)  # 购买股票增加20点经验
+                self.save_game()
                         
         # 卖出逻辑
         elif action == "2":
             stocks = self.player.get("stocks", {})
             # 确保持仓是字典且包含该股票代码，然后获取amount，否则为0.0
-            current_holding = float(stocks.get(code, {}).get("amount", 0.0)) if isinstance(stocks, dict) else 0.0
+            current_holding = float(stocks.get(code, {}).get("amount", 0.0)) if isinstance(stocks, dict) and isinstance(stocks.get(code), dict) and isinstance(stocks.get(code).get("amount"), (int, float)) else 0.0 # 确保持仓是浮点数并检查结构
 
             # 强化类型检查和数量检查
             if current_holding < amount:
@@ -807,7 +838,7 @@ class StockTycoon:
             avg_price = float(stocks[code].get("avg_price", 0.0)) if isinstance(stocks.get(code), dict) and "avg_price" in stocks.get(code) else 0.0
             profit_loss = (stock.current_price - avg_price) * amount # 计算盈亏
 
-            self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income if isinstance(self.player.get("cash", 0), (int, float)) else total_income # 确保现金是浮点数
+            self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income if isinstance(self.player.get("cash", 0.0), (int, float)) else total_income # 确保现金是浮点数
 
             # 更新持仓数量，平均成本价不变
             if isinstance(stocks, dict):
@@ -838,6 +869,7 @@ class StockTycoon:
                 "price": stock.current_price
             })
             self.record_trade("股票", code, "卖出", amount, stock.current_price) # 交易记录数量保存为浮点数
+            self.add_exp(int(profit_loss / 1000))  # 盈利每1000元增加1点经验
             self.save_game()
 
         # 做空逻辑
@@ -879,6 +911,7 @@ class StockTycoon:
                  "price": stock.current_price
              })
              self.record_trade("股票", code, "做空", amount, stock.current_price) # 交易记录数量保存为浮点数
+             self.add_exp(30)  # 做空增加30点经验
              self.save_game()
 
         # 平仓做空逻辑
@@ -940,6 +973,7 @@ class StockTycoon:
                  "price": stock.current_price
              })
              self.record_trade("股票", code, "平仓做空", amount_to_cover, stock.current_price) # 交易记录数量保存为浮点数
+             self.add_exp(int(total_profit / 1000))  # 盈利每1000元增加1点经验
              self.save_game()
 
         else:
@@ -1233,7 +1267,7 @@ class StockTycoon:
             avg_price = float(stocks[stock.code].get("avg_price", 0.0)) if isinstance(stocks.get(stock.code), dict) and "avg_price" in stocks.get(stock.code) else 0.0
             profit_loss = (stock.current_price - avg_price) * amount
 
-            self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income if isinstance(self.player.get("cash", 0), (int, float)) else total_income
+            self.player["cash"] = float(self.player.get("cash", 0.0)) + total_income if isinstance(self.player.get("cash", 0.0), (int, float)) else total_income
 
             if isinstance(stocks, dict):
                 holding_data = stocks.get(stock.code)
@@ -1252,6 +1286,9 @@ class StockTycoon:
 
             print(f"{Fore.GREEN}成功卖出 {int(amount)} 股 {stock.name}，获得{total_income:.2f}元{Style.RESET_ALL}")
             print(f"{Fore.GREEN}本次交易盈亏：{profit_loss:.2f}元{Style.RESET_ALL}")
+
+            if profit_loss > 0:
+                self.add_exp(int(profit_loss / 1000))  # 盈利每1000元增加1点经验
 
             stock.operation_history.append({
                 "day": self.day,
@@ -1391,13 +1428,26 @@ class StockTycoon:
         self.record_trade("债券", bond.code, "买入", amount, bond.current_price)
         self.save_game()
 
+    def add_exp(self, amount):
+        """增加经验并检查是否升级"""
+        self.player["exp"] = int(self.player.get("exp", 0)) + amount if isinstance(self.player.get("exp"), (int, float)) else amount
+        print(f"获得 {amount} 点经验！当前经验：{self.player['exp']}/{self.player['exp_to_next_level']}")
+        if int(self.player.get("exp", 0)) >= int(self.player.get("exp_to_next_level", 100)):
+            self.player["level"] = int(self.player.get("level", 1)) + 1
+            self.player["exp"] = 0
+            self.player["exp_to_next_level"] = int(int(self.player.get("exp_to_next_level", 100)) * 1.5)
+            print(f"{Fore.GREEN}升级！当前等级：{self.player['level']}{Style.RESET_ALL}")
+            if int(self.player.get("level", 1)) >= 10 and not self.tycoon_mode:
+                print(f"{Fore.YELLOW}恭喜！已解锁土豪模式！{Style.RESET_ALL}")
+
 # ========== 主菜单 ==========
 def main_menu(game):
     while True:
         print("")
         print(f"{Fore.CYAN}=== 主菜单 ==={Style.RESET_ALL}")
-        # 确保 player['cash'] 和 player['debt'] 是数字，并格式化为元
+        print(f"等级：{game.player['level']} | 经验：{game.player['exp']}/{game.player['exp_to_next_level']}")
         cash_display = float(game.player.get('cash', 0.0))
+        debt_display = float(game.player.get('debt', 0.0))
         # 计算股票和债券的总价值，并显示详细拆分
         stocks_total_value = 0.0
         stocks_profit_loss = 0.0
@@ -1565,7 +1615,9 @@ def manage_saves(game):
         print("2. 另存为新存档")
         print("3. 加载其他存档")
         print("4. 删除存档")
-        print("5. 返回主菜单")
+        print(f"5. 土豪模式: {'开启' if game.tycoon_mode else '关闭'}") # 直接显示当前状态，不显示锁定
+        print("6. 返回主菜单")
+        
         choice = input("请选择操作：")
         
         if choice == '1':
@@ -1578,11 +1630,9 @@ def manage_saves(game):
                 new_save = f"{new_name}.json"
                 old_save = game.current_save
                 
-                # 保存到新存档
                 game.current_save = new_save
                 game.save_game()
                 
-                # 询问是否切换
                 switch = input(f"是否切换到新存档 {new_save}？(y/n): ").lower()
                 if switch == 'y':
                     print(f"{Fore.GREEN}已切换到 {new_save}{Style.RESET_ALL}")
@@ -1613,16 +1663,14 @@ def manage_saves(game):
             if 1 <= load_choice <= len(saves):
                 selected = saves[load_choice-1]
                 
-                # 保存当前进度
                 save_current = input("是否先保存当前进度？(y/n): ").lower()
                 if save_current == 'y':
                     game.save_game()
                 
-                # 加载新存档
                 game.current_save = selected
                 game.load_game()
                 print(f"{Fore.GREEN}已加载存档 {selected}{Style.RESET_ALL}")
-                return  # 返回主菜单刷新数据
+                return
             print(f"{Fore.RED}无效的选择{Style.RESET_ALL}")
         
         elif choice == '4':
@@ -1651,7 +1699,6 @@ def manage_saves(game):
                     try:
                         os.remove(os.path.join('saves', selected))
                         print(f"{Fore.GREEN}存档 {selected} 已删除{Style.RESET_ALL}")
-                        # 如果删除的是当前存档，重置为默认存档
                         if selected == game.current_save:
                             game.current_save = 'default_save.json'
                             print(f"{Fore.YELLOW}当前存档已重置为默认存档{Style.RESET_ALL}")
@@ -1661,6 +1708,9 @@ def manage_saves(game):
                 print(f"{Fore.RED}无效的选择{Style.RESET_ALL}")
         
         elif choice == '5':
+            game.toggle_tycoon_mode()
+        
+        elif choice == '6':
             return
         
         else:
